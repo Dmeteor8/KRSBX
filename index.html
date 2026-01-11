@@ -1,0 +1,1411 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>业务报销记账</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- SheetJS for Excel Export -->
+    <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+    <!-- LeanCloud SDK -->
+    <script src="https://cdn.jsdelivr.net/npm/leancloud-storage@4.15.0/dist/av-min.js"></script>
+    
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        primary: '#4F46E5', // Indigo 600
+                        secondary: '#64748B', // Slate 500
+                        bg: '#F8FAFC', // Slate 50
+                        surface: '#FFFFFF',
+                    },
+                    boxShadow: {
+                        'soft': '0 4px 20px -2px rgba(0, 0, 0, 0.05)',
+                        'nav': '0 -4px 20px rgba(0,0,0,0.03)'
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        /* 隐藏滚动条但允许滚动 */
+        .no-scrollbar::-webkit-scrollbar {
+            display: none;
+        }
+        .no-scrollbar {
+            -ms-overflow-style: none;
+            scrollbar-width: none;
+        }
+        
+        /* 模拟iOS底部安全区域 */
+        .pb-safe {
+            padding-bottom: env(safe-area-inset-bottom);
+        }
+        
+        /* 简单的淡入动画 */
+        .fade-in {
+            animation: fadeIn 0.3s ease-in-out;
+        }
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(5px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        /* 底部导航激活态 */
+        .nav-item.active {
+            color: #4F46E5;
+        }
+        .nav-item.active svg {
+            stroke: #4F46E5;
+        }
+        
+        /* 输入框自动填充背景色修复 */
+        input:-webkit-autofill,
+        input:-webkit-autofill:hover, 
+        input:-webkit-autofill:focus, 
+        input:-webkit-autofill:active{
+            -webkit-box-shadow: 0 0 0 30px #F8FAFC inset !important;
+            -webkit-text-fill-color: #334155 !important;
+            transition: background-color 5000s ease-in-out 0s;
+        }
+    </style>
+</head>
+<body class="bg-gray-200 text-slate-800 font-sans antialiased h-[100dvh] flex justify-center overflow-hidden">
+
+    <!-- ==================== 登录/注册界面 ==================== -->
+    <div id="auth-view" class="w-full max-w-md h-full bg-bg flex flex-col items-center justify-center p-6 z-50 absolute inset-0 transition-opacity duration-300">
+        <div class="w-full bg-surface p-8 rounded-3xl shadow-soft border border-slate-100 fade-in">
+            <div class="text-center mb-8">
+                <div class="w-16 h-16 bg-indigo-100 rounded-2xl mx-auto flex items-center justify-center text-primary text-3xl mb-4 shadow-inner">
+                    💰
+                </div>
+                <h1 class="text-2xl font-bold text-slate-900">报销记账</h1>
+                <p class="text-sm text-slate-500 mt-1">请登录以同步您的数据</p>
+            </div>
+
+            <!-- Tab 切换 -->
+            <div class="flex bg-slate-100 p-1 rounded-xl mb-6">
+                <button onclick="switchAuthTab('login')" id="tab-login-btn" class="flex-1 py-2 text-sm font-bold rounded-lg bg-white text-primary shadow-sm transition-all">登录</button>
+                <button onclick="switchAuthTab('register')" id="tab-register-btn" class="flex-1 py-2 text-sm font-bold rounded-lg text-slate-500 hover:text-slate-700 transition-all">注册</button>
+            </div>
+
+            <!-- 登录表单 -->
+            <div id="form-login" class="space-y-4">
+                <div>
+                    <label class="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">用户名</label>
+                    <input type="text" id="login-username" class="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-primary/20 transition-all" placeholder="请输入用户名">
+                </div>
+                <div>
+                    <label class="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">密码</label>
+                    <input type="password" id="login-password" class="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-primary/20 transition-all" placeholder="请输入密码">
+                </div>
+                <button onclick="handleLogin()" class="w-full py-3.5 rounded-xl bg-primary text-white font-bold shadow-lg shadow-indigo-500/30 hover:bg-indigo-700 transition-all active:scale-95 mt-2">
+                    立即登录
+                </button>
+            </div>
+
+            <!-- 注册表单 (默认隐藏) -->
+            <div id="form-register" class="space-y-4 hidden">
+                <div>
+                    <label class="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">设置用户名</label>
+                    <input type="text" id="reg-username" class="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-primary/20 transition-all" placeholder="用于登录">
+                </div>
+                <div>
+                    <label class="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">设置密码</label>
+                    <input type="password" id="reg-password" class="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-primary/20 transition-all" placeholder="至少6位字符">
+                </div>
+                <button onclick="handleRegister()" class="w-full py-3.5 rounded-xl bg-emerald-500 text-white font-bold shadow-lg shadow-emerald-500/30 hover:bg-emerald-600 transition-all active:scale-95 mt-2">
+                    创建账号
+                </button>
+            </div>
+            
+            <div id="auth-msg" class="text-center text-xs mt-4 h-4 text-red-500 font-medium"></div>
+        </div>
+        <p class="mt-8 text-xs text-slate-400">数据存储于 LeanCloud 云端</p>
+    </div>
+
+    <!-- ==================== 主应用界面 (登录后显示) ==================== -->
+    <div id="app-view" class="w-full max-w-md bg-bg h-full relative flex flex-col shadow-2xl overflow-hidden hidden">
+        
+        <!-- 顶部 Header -->
+        <header class="bg-surface px-6 py-4 flex justify-between items-center shadow-sm z-10 sticky top-0">
+            <div>
+                <h1 class="text-xl font-bold text-slate-900 tracking-tight">报销记账</h1>
+                <p class="text-xs text-slate-500" id="headerDate">加载中...</p>
+            </div>
+            <div class="w-8 h-8 rounded-full bg-indigo-50 flex items-center justify-center text-primary">
+                💰
+            </div>
+        </header>
+
+        <!-- 主内容区域 (可滚动) -->
+        <main class="flex-1 overflow-y-auto no-scrollbar p-5 pb-24 relative" id="mainContainer">
+            
+            <!-- 1. 记账页面 -->
+            <div id="page-entry" class="page space-y-5 fade-in">
+                <!-- 日期卡片 -->
+                <div class="bg-surface p-5 rounded-2xl shadow-soft border border-slate-100">
+                    <label class="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">日期</label>
+                    <input type="date" id="recordDate" class="w-full bg-slate-50 border-none rounded-xl px-4 py-3 text-slate-700 font-medium focus:ring-2 focus:ring-primary/20 outline-none" onchange="loadPrevDayInfo()">
+                    <div id="prevDayInfo" class="mt-3 text-xs text-indigo-500 bg-indigo-50 p-2 rounded-lg flex items-center gap-1">
+                        <!-- 动态内容 -->
+                    </div>
+                </div>
+
+                <!-- 2. 公里数卡片 -->
+<div class="bg-surface p-5 rounded-2xl shadow-soft border border-slate-100">
+    <div class="flex justify-between items-center mb-2">
+        <label class="block text-xs font-semibold text-slate-400 uppercase tracking-wider">里程记录</label>
+        <span class="text-xs font-bold text-primary">油补: ¥<span id="fuelSubsidyDisplay">0.00</span></span>
+    </div>
+    
+    <div class="grid grid-cols-2 gap-3 mb-3">
+        <!-- 出发公里数 -->
+        <div>
+            <label class="text-xs text-slate-500 block mb-1">出发里程</label>
+            <div class="relative">
+                <input type="number" id="startMileage" class="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-lg font-bold text-slate-800 outline-none focus:ring-2 focus:ring-primary/20" placeholder="0" oninput="calculateTotalMileage()">
+            </div>
+        </div>
+        <!-- 回程公里数 -->
+        <div>
+            <label class="text-xs text-slate-500 block mb-1">回程里程</label>
+            <div class="relative">
+                <input type="number" id="endMileage" class="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-lg font-bold text-slate-800 outline-none focus:ring-2 focus:ring-primary/20" placeholder="0" oninput="calculateTotalMileage()">
+            </div>
+        </div>
+    </div>
+
+    <!-- 当日总里程 (自动计算，只读) -->
+    <div class="bg-indigo-50 rounded-lg p-3 flex justify-between items-center">
+        <span class="text-xs font-semibold text-indigo-600">当日总里程</span>
+        <div class="flex items-center gap-1">
+            <input type="number" id="mileage" readonly class="bg-transparent text-right text-xl font-extrabold text-indigo-700 w-24 outline-none" value="0">
+            <span class="text-sm font-bold text-indigo-400">km</span>
+        </div>
+    </div>
+</div>
+
+
+                <!-- 客户拜访 -->
+                <div class="bg-surface p-5 rounded-2xl shadow-soft border border-slate-100">
+                    <label class="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-3">拜访客户 (最多6家)</label>
+                    <div id="clientsContainer" class="space-y-2 mb-3"></div>
+                    <!-- === 新增：客户联想数据列表 === -->
+                    <datalist id="client-suggestions">
+                     <!-- JS 会自动在这里填充 <option>内容 -->
+                    </datalist>
+                    <button onclick="addClientField()" class="w-full py-2 border-2 border-dashed border-slate-200 rounded-xl text-slate-400 text-sm font-medium hover:border-primary hover:text-primary transition-colors">
+                        + 添加客户
+                    </button>
+                </div>
+
+                <!-- 费用明细网格 -->
+                <div class="bg-surface p-5 rounded-2xl shadow-soft border border-slate-100">
+                    <label class="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-4">费用明细</label>
+                    <div class="grid grid-cols-2 gap-4">
+                        <div class="space-y-1">
+                            <label class="text-xs text-slate-500">过路费</label>
+                            <input type="number" id="tollFee" class="w-full bg-slate-50 rounded-lg px-3 py-2 text-sm font-medium outline-none focus:ring-1 focus:ring-primary" value="0" step="0.01">
+                        </div>
+                        <div class="space-y-1">
+                            <label class="text-xs text-slate-500">停车费</label>
+                            <input type="number" id="parkingFee" class="w-full bg-slate-50 rounded-lg px-3 py-2 text-sm font-medium outline-none focus:ring-1 focus:ring-primary" value="0" step="0.01">
+                        </div>
+                        <div class="space-y-1">
+                            <label class="text-xs text-slate-500">高铁费</label>
+                            <input type="number" id="trainFee" class="w-full bg-slate-50 rounded-lg px-3 py-2 text-sm font-medium outline-none focus:ring-1 focus:ring-primary" value="0" step="0.01">
+                        </div>
+                        <div class="space-y-1">
+                            <label class="text-xs text-slate-500">代驾费</label>
+                            <input type="number" id="driverFee" class="w-full bg-slate-50 rounded-lg px-3 py-2 text-sm font-medium outline-none focus:ring-1 focus:ring-primary" value="0" step="0.01">
+                        </div>
+                        <div class="space-y-1">
+                            <label class="text-xs text-slate-500">住宿费</label>
+                            <input type="number" id="hotelFee" class="w-full bg-slate-50 rounded-lg px-3 py-2 text-sm font-medium outline-none focus:ring-1 focus:ring-primary" value="0" step="0.01">
+                        </div>
+                        <div class="space-y-1">
+                            <label class="text-xs text-slate-500">招待费</label>
+                            <input type="number" id="entertainmentFee" class="w-full bg-slate-50 rounded-lg px-3 py-2 text-sm font-medium outline-none focus:ring-1 focus:ring-primary" value="0" step="0.01">
+                        </div>
+                        <div class="space-y-1 col-span-2">
+                            <label class="text-xs text-slate-500">打车费</label>
+                            <input type="number" id="taxiFee" class="w-full bg-slate-50 rounded-lg px-3 py-2 text-sm font-medium outline-none focus:ring-1 focus:ring-primary" value="0" step="0.01">
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 上传区域 -->
+                <div class="bg-surface p-5 rounded-2xl shadow-soft border border-slate-100">
+                    <label class="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-3">发票/小票</label>
+                    <label class="flex flex-col items-center justify-center w-full h-24 border-2 border-slate-200 border-dashed rounded-xl cursor-pointer hover:bg-slate-50 transition-colors">
+                        <div class="flex flex-col items-center justify-center pt-5 pb-6">
+                            <svg class="w-6 h-6 mb-1 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"></path></svg>
+                            <p class="text-xs text-slate-500">点击上传图片</p>
+                        </div>
+                        <input type="file" id="receipts" multiple accept="image/*,.pdf" class="hidden" onchange="previewFiles()" />
+                    </label>
+                    <div id="filePreview" class="mt-3 flex flex-wrap gap-2"></div>
+                </div>
+
+                <!-- 底部操作按钮 -->
+                <div class="grid grid-cols-4 gap-3 pt-2">
+                    <button onclick="clearForm()" class="col-span-1 py-3 rounded-xl bg-slate-200 text-slate-600 font-semibold text-sm hover:bg-slate-300 transition-colors">
+                        清空
+                    </button>
+                    <button onclick="saveRecord()" class="col-span-3 py-3 rounded-xl bg-primary text-white font-bold shadow-lg shadow-indigo-500/30 hover:bg-indigo-700 transition-all active:scale-95">
+                        保存记录
+                    </button>
+                </div>
+            </div>
+
+            <!-- 2. 历史记录页面 -->
+            <div id="page-history" class="page hidden fade-in">
+                <div class="flex gap-2 mb-4 sticky top-0 bg-bg z-10 py-2">
+                    <select id="monthFilter" onchange="loadHistory()" class="flex-1 bg-surface border-none rounded-xl px-4 py-2 text-sm shadow-sm focus:ring-2 focus:ring-primary/20 outline-none text-slate-700 font-medium">
+                        <option value="">全部月份</option>
+                    </select>
+                    <button onclick="clearAllData()" class="px-4 bg-red-50 text-red-500 rounded-xl text-sm font-bold hover:bg-red-100 transition-colors">
+                        清空
+                    </button>
+                </div>
+                <div id="historyList" class="space-y-3 pb-4">
+                    <!-- 列表项将插入这里 -->
+                </div>
+            </div>
+
+            <!-- 3. 导出页面 -->
+            <div id="page-export" class="page hidden fade-in">
+                <div class="bg-surface p-6 rounded-2xl shadow-soft border border-slate-100 mb-4">
+                    <h2 class="text-lg font-bold text-slate-800 mb-4">数据导出</h2>
+                    <div class="mb-4">
+                        <label class="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">选择月份</label>
+                        <input type="month" id="exportMonth" class="w-full bg-slate-50 border-none rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-primary/20" onchange="calculateSummary()">
+                    </div>
+                    <div id="summaryDisplay" class="space-y-3">
+                        <!-- 统计数据 -->
+                    </div>
+                </div>
+                <button onclick="exportToExcel()" class="w-full py-4 rounded-xl bg-emerald-500 text-white font-bold shadow-lg shadow-emerald-500/30 hover:bg-emerald-600 transition-all active:scale-95 flex items-center justify-center gap-2">
+                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path></svg>
+                    导出 Excel 报表
+                </button>
+            </div>
+
+            <!-- 4. 设置页面 -->
+            <div id="page-settings" class="page hidden fade-in">
+                <div class="bg-surface p-6 rounded-2xl shadow-soft border border-slate-100 mb-4">
+                    <h2 class="text-lg font-bold text-slate-800 mb-4">系统设置</h2>
+                    <div class="mb-6">
+                        <label class="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">油补单价 (元/km)</label>
+                        <div class="flex items-center gap-3">
+                            <input type="number" id="fuelPrice" step="0.1" class="flex-1 bg-slate-50 border-none rounded-xl px-4 py-3 text-lg font-bold outline-none focus:ring-2 focus:ring-primary/20">
+                        </div>
+                    </div>
+                    <button onclick="saveSettings()" class="w-full py-3 rounded-xl bg-slate-800 text-white font-semibold hover:bg-slate-900 transition-colors mb-4">
+                        保存设置
+                    </button>
+                    
+                    <!-- 新增：退出登录按钮 -->
+                    <button onclick="handleLogout()" class="w-full py-3 rounded-xl bg-red-50 text-red-600 font-semibold hover:bg-red-100 border border-red-100 transition-colors">
+                        退出登录
+                    </button>
+                </div>
+
+                <div class="mt-6 p-4 bg-emerald-50 rounded-2xl border border-emerald-100 flex items-start gap-3">
+                    <div class="text-emerald-500 mt-0.5">
+                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg>
+                    </div>
+                    <div>
+                        <p class="text-sm font-bold text-emerald-800">云端同步已开启</p>
+                        <p class="text-xs text-emerald-600 mt-1">数据实时保存至 LeanCloud，换设备不丢失。</p>
+                    </div>
+                </div>
+            </div>
+            <!-- 5. 年度统计页面 -->
+            <div id="page-statistics" class="page hidden fade-in">
+                <div class="bg-surface p-6 rounded-2xl shadow-soft border border-slate-100 mb-4">
+                    <h2 class="text-lg font-bold text-slate-800 mb-4">年度报销统计</h2>
+                    <div class="mb-4">
+                        <label class="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">选择年份</label>
+                        <select id="yearFilter" onchange="loadAnnualStatistics()" class="w-full bg-slate-50 border-none rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-primary/20 font-medium text-slate-700">
+                            <!-- JS会自动填充年份 -->
+                        </select>
+                    </div>
+                    
+                    <!-- 年度总计卡片 -->
+                    <div class="bg-indigo-600 rounded-xl p-6 text-white text-center shadow-lg shadow-indigo-500/30 mb-6">
+                        <div class="text-xs text-indigo-200 mb-1">年度总报销金额</div>
+                        <div class="text-3xl font-bold" id="yearTotalDisplay">¥0.00</div>
+                    </div>
+
+                    <!-- 详细数据 -->
+                    <div id="yearSummaryDisplay" class="space-y-3">
+                        <!-- JS生成内容 -->
+                    </div>
+                </div>
+            </div>
+
+        </main>
+
+        <!-- 底部导航栏 -->
+        <nav class="fixed bottom-0 left-0 right-0 mx-auto w-full max-w-md bg-surface border-t border-slate-100 px-6 py-2 pb-safe shadow-nav z-50">
+            <ul class="flex justify-between items-center">
+                <li>
+                    <button onclick="showTab('entry')" id="tab-entry" class="nav-item active flex flex-col items-center gap-1 p-2 w-16 text-slate-400 transition-colors">
+                        <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"></path></svg>
+                        <span class="text-[10px] font-medium">记账</span>
+                    </button>
+                </li>
+                <li>
+                    <button onclick="showTab('history')" id="tab-history" class="nav-item flex flex-col items-center gap-1 p-2 w-16 text-slate-400 transition-colors">
+                        <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                        <span class="text-[10px] font-medium">历史</span>
+                    </button>
+                </li>
+                <li>
+                    <button onclick="showTab('export')" id="tab-export" class="nav-item flex flex-col items-center gap-1 p-2 w-16 text-slate-400 transition-colors">
+                        <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"></path></svg>
+                        <span class="text-[10px] font-medium">导出</span>
+                    </button>
+                </li>
+                <li>
+                    <button onclick="showTab('statistics')" id="tab-statistics" class="nav-item flex flex-col items-center gap-1 p-2 w-16 text-slate-400 transition-colors">
+                        <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 8v8m-4-5v5m-4-2v2m-2 4h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"></path></svg>
+                        <span class="text-[10px] font-medium">统计</span>
+                    </button>
+                </li>
+
+                <li>
+                    <button onclick="showTab('settings')" id="tab-settings" class="nav-item flex flex-col items-center gap-1 p-2 w-16 text-slate-400 transition-colors">
+                        <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path></svg>
+                        <span class="text-[10px] font-medium">设置</span>
+                    </button>
+                </li>
+                
+            </ul>
+        </nav>
+    </div>
+
+<script>
+// ==================== LeanCloud 初始化 ====================
+console.log('🔄 开始初始化...');
+
+try {
+    AV.init({
+        appId: "5HchUk1X6axnIvc5z8SeLgfx-gzGzoHsz",           
+        appKey: "VqnYUrCemQAtTDn3dxDuK2K8",         
+        serverURL: "https://5hchuk1x.lc-cn-n1-shared.com"    
+    });
+    console.log('✅ LeanCloud 初始化成功');
+    
+    // 测试连接
+    AV.Query.doCloudQuery('SELECT * FROM _User LIMIT 1')
+        .then(() => console.log('✅ 数据库连接成功'))
+        .catch(err => console.log('⚠️ 连接测试(忽略):', err.message));
+        
+} catch(e) {
+    console.error('❌ 初始化失败:', e);
+}
+
+// ==================== 登录/注册逻辑 (新增) ====================
+
+// 切换登录/注册 Tab
+function switchAuthTab(type) {
+    const loginBtn = document.getElementById('tab-login-btn');
+    const regBtn = document.getElementById('tab-register-btn');
+    const loginForm = document.getElementById('form-login');
+    const regForm = document.getElementById('form-register');
+    const msg = document.getElementById('auth-msg');
+    
+    msg.textContent = ''; // 清空错误信息
+
+    if(type === 'login') {
+        loginBtn.className = "flex-1 py-2 text-sm font-bold rounded-lg bg-white text-primary shadow-sm transition-all";
+        regBtn.className = "flex-1 py-2 text-sm font-bold rounded-lg text-slate-500 hover:text-slate-700 transition-all";
+        loginForm.classList.remove('hidden');
+        regForm.classList.add('hidden');
+    } else {
+        regBtn.className = "flex-1 py-2 text-sm font-bold rounded-lg bg-white text-emerald-600 shadow-sm transition-all";
+        loginBtn.className = "flex-1 py-2 text-sm font-bold rounded-lg text-slate-500 hover:text-slate-700 transition-all";
+        regForm.classList.remove('hidden');
+        loginForm.classList.add('hidden');
+    }
+}
+
+// 处理登录
+async function handleLogin() {
+    const username = document.getElementById('login-username').value.trim();
+    const password = document.getElementById('login-password').value.trim();
+    const msg = document.getElementById('auth-msg');
+
+    if(!username || !password) {
+        msg.textContent = '请输入用户名和密码';
+        return;
+    }
+
+    try {
+        const user = await AV.User.logIn(username, password);
+        console.log('✅ 登录成功:', user);
+        checkLoginState();
+    } catch(error) {
+        console.error('❌ 登录失败:', error);
+        if(error.code === 210) {
+            msg.textContent = '用户名或密码错误';
+        } else if(error.code === 211) {
+            msg.textContent = '用户不存在';
+        } else {
+            msg.textContent = '登录失败: ' + error.message;
+        }
+    }
+}
+
+// 处理注册
+async function handleRegister() {
+    const username = document.getElementById('reg-username').value.trim();
+    const password = document.getElementById('reg-password').value.trim();
+    const msg = document.getElementById('auth-msg');
+
+    if(!username || !password) {
+        msg.textContent = '请输入用户名和密码';
+        return;
+    }
+    if(password.length < 6) {
+        msg.textContent = '密码长度至少为6位';
+        return;
+    }
+
+    try {
+        const user = new AV.User();
+        user.setUsername(username);
+        user.setPassword(password);
+        // 可以在这里添加更多字段，如 email
+        await user.signUp();
+        console.log('✅ 注册成功');
+        // 注册成功后自动登录
+        checkLoginState();
+    } catch(error) {
+        console.error('❌ 注册失败:', error);
+        if(error.code === 202) {
+            msg.textContent = '用户名已被占用';
+        } else {
+            msg.textContent = '注册失败: ' + error.message;
+        }
+    }
+}
+
+// 处理退出登录
+async function handleLogout() {
+    if(confirm('确定要退出登录吗？')) {
+        AV.User.logOut();
+        checkLoginState();
+    }
+}
+
+// 检查登录状态，控制界面显示
+function checkLoginState() {
+    const currentUser = AV.User.current();
+    const authView = document.getElementById('auth-view');
+    const appView = document.getElementById('app-view');
+
+    if (currentUser) {
+        // 已登录
+        authView.classList.add('hidden');
+        appView.classList.remove('hidden');
+        // 只有登录后才初始化主应用
+        initApp();
+    } else {
+        // 未登录
+        authView.classList.remove('hidden');
+        appView.classList.add('hidden');
+    }
+}
+
+// ==================== 工具函数 ====================
+// 本地存储封装
+function saveToStorage(key, value) {
+    localStorage.setItem(key, JSON.stringify(value));
+}
+function getFromStorage(key) {
+    const item = localStorage.getItem(key);
+    return item ? JSON.parse(item) : null;
+}
+
+// ==================== 全局变量 ====================
+let currentSettings = { fuelPricePerKm: 1 };
+let clientCount = 0;
+let uploadedFiles = [];
+let editingId = null; // 用于记录正在编辑的记录ID，null表示新增
+// ==================== 全局变量 (新增) ====================
+// 使用 Set 存储客户名，自动去重，方便快速查找
+let knownClients = new Set(); 
+
+// ==================== 客户联想逻辑 (新增) ====================
+
+// 1. 从云端加载已存在的客户列表
+async function loadClientOptions() {
+    try {
+        const currentUser = AV.User.current();
+        if(!currentUser) return; // 未登录不加载
+
+        // 查询 Client 表，只查当前用户的
+        const query = new AV.Query('Client');
+        query.equalTo('owner', currentUser);
+        query.limit(1000); // 限制最多1000个客户
+        const results = await query.find();
+
+        // 清空旧数据
+        knownClients.clear();
+        const datalist = document.getElementById('client-suggestions');
+        datalist.innerHTML = ''; // 清空 HTML 选项
+
+        // 填充数据
+        results.forEach(obj => {
+            const name = obj.get('name');
+            if(name) {
+                knownClients.add(name);
+                
+                // 添加到 datalist 供 HTML 使用
+                const option = document.createElement('option');
+                option.value = name;
+                datalist.appendChild(option);
+            }
+        });
+        console.log(`✅ 已加载 ${knownClients.size} 个客户联想词`);
+    } catch (error) {
+        console.error('加载客户列表失败:', error);
+    }
+}
+
+// 2. 保存报销时，将新客户同步到 Client 表
+async function syncClientsToCloud(clients) {
+    const currentUser = AV.User.current();
+    if(!currentUser) return;
+
+    for (const name of clients) {
+        // 如果这个客户不在我们的已知列表里，说明是新客户
+        if (!knownClients.has(name)) {
+            try {
+                const Client = AV.Object.extend('Client');
+                const clientObj = new Client();
+                clientObj.set('name', name);
+                clientObj.set('owner', currentUser); // 关联当前用户
+                await clientObj.save();
+                
+                // 保存成功后，加入本地缓存和联想列表，无需刷新页面即可生效
+                knownClients.add(name);
+                const option = document.createElement('option');
+                option.value = name;
+                document.getElementById('client-suggestions').appendChild(option);
+                
+                console.log(`🆕 新客户已存入云端: ${name}`);
+            } catch (e) {
+                console.error(`保存客户 ${name} 失败:`, e);
+            }
+        }
+    }
+}
+
+
+
+// ==================== 初始化 ====================
+window.onload = function() {
+    console.log('🚀 页面加载完成');
+    // 优先检查登录状态
+    checkLoginState();
+};
+
+// 将原有的初始化逻辑封装在 initApp 中
+function initApp() {
+    const today = new Date();
+    document.getElementById('recordDate').value = today.toISOString().split('T')[0];
+    
+    // 更新Header日期
+    const options = { year: 'numeric', month: 'long', day: 'numeric', weekday: 'long' };
+    document.getElementById('headerDate').textContent = today.toLocaleDateString('zh-CN', options);
+    
+    loadSettings();
+    loadPrevDayInfo();
+    addClientField();
+    generateMonthOptions();
+    showTab('entry');
+    // === 新增：加载客户联想 ===
+    loadClientOptions(); 
+}
+
+// ==================== 标签页切换 ====================
+function showTab(tabName) {
+    // 隐藏所有页面
+    document.querySelectorAll('.page').forEach(p => p.classList.add('hidden'));
+    // 显示目标页面
+    document.getElementById('page-' + tabName).classList.remove('hidden');
+    
+    // 更新底部导航样式
+    document.querySelectorAll('.nav-item').forEach(b => b.classList.remove('active'));
+    document.getElementById('tab-' + tabName).classList.add('active');
+
+    // 页面特定逻辑
+    if(tabName === 'history') loadHistory();
+    if(tabName === 'export') loadSummary();
+    if(tabName === 'statistics') loadAnnualStatistics();
+
+    // 滚动回顶部
+    document.getElementById('mainContainer').scrollTop = 0;
+}
+
+// ==================== 客户管理 ====================
+function addClientField() {
+    if(clientCount >= 6) {
+        alert('最多添加6家客户');
+        return;
+    }
+    clientCount++;
+    const container = document.getElementById('clientsContainer');
+    const div = document.createElement('div');
+    div.className = 'flex gap-2 items-center animate-[fadeIn_0.2s]';
+    
+    // === 修改：input 标签增加了 list="client-suggestions" 和 autocomplete="off" ===
+    div.innerHTML = `
+        <input type="text" 
+               class="flex-1 bg-slate-50 border-none rounded-lg px-3 py-2 text-sm client-name outline-none focus:ring-1 focus:ring-primary" 
+               list="client-suggestions" 
+               autocomplete="off"
+               placeholder="客户公司名称 ${clientCount}">
+        <button onclick="removeClient(this)" 
+                class="p-2 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
+        </button>
+    `;
+    container.appendChild(div);
+}
+
+
+function removeClient(btn) {
+    btn.parentElement.remove();
+    clientCount--;
+}
+
+// ==================== 计算总里程 (新增) ====================
+function calculateTotalMileage() {
+    const start = parseFloat(document.getElementById('startMileage').value) || 0;
+    const end = parseFloat(document.getElementById('endMileage').value) || 0;
+    
+    let total = end - start;
+    
+    // 如果算出来是负数（比如回程填错了），暂时显示为0或者负数，这里设为负数提醒用户
+    // 如果想强制为0，可以用: if (total < 0) total = 0;
+    
+    // 更新总里程显示框
+    document.getElementById('mileage').value = total;
+    
+    // 触发油补计算（因为总里程变了）
+    calculateFuelSubsidy();
+}
+// ==================== 计算油补 (缺失的函数) ====================
+function calculateFuelSubsidy() {
+    // 获取总里程
+    const mileage = parseFloat(document.getElementById('mileage').value) || 0;
+    // 计算：里程 * 单价
+    const subsidy = mileage * currentSettings.fuelPricePerKm;
+    // 更新页面上的显示文字
+    document.getElementById('fuelSubsidyDisplay').textContent = subsidy.toFixed(2);
+}
+
+
+// ==================== 加载前一天信息 ====================
+async function loadPrevDayInfo() {
+    try {
+        const currentDateStr = document.getElementById('recordDate').value;
+        const currentDate = new Date(currentDateStr);
+        
+        const query = new AV.Query('Expense');
+        query.lessThan('date', currentDateStr);
+        query.descending('date');
+        query.limit(1);
+        
+        const results = await query.find();
+        
+        const infoDiv = document.getElementById('prevDayInfo');
+        if(results.length > 0) {
+            const prev = results[0];
+            const prevDate = new Date(prev.get('date')).toLocaleDateString('zh-CN', {month:'numeric', day:'numeric'});
+            const prevMileage = prev.get('mileage');
+            const prevClients = (prev.get('clients') || []).join('、') || '无';
+            
+            infoDiv.innerHTML = `
+                <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                <span>${prevDate} 行程: ${prevMileage}km | ${prevClients}</span>
+            `;
+        } else {
+            infoDiv.innerHTML = `<span>暂无前一天记录</span>`;
+        }
+    } catch(error) {
+        console.error('加载前一天信息失败:', error);
+    }
+}
+
+// ==================== 文件预览 ====================
+function previewFiles() {
+    const files = document.getElementById('receipts').files;
+    const preview = document.getElementById('filePreview');
+    preview.innerHTML = '';
+    uploadedFiles = [];
+    
+    Array.from(files).forEach((file, index) => {
+        const reader = new FileReader();
+        reader.onload = function(e) {
+            uploadedFiles.push({
+                name: file.name,
+                data: e.target.result,
+                type: file.type
+            });
+            
+            const div = document.createElement('div');
+            div.className = 'relative w-16 h-16 rounded-lg overflow-hidden border border-slate-200 shadow-sm';
+            
+            if(file.type.startsWith('image/')) {
+                const img = document.createElement('img');
+                img.src = e.target.result;
+                img.className = 'w-full h-full object-cover';
+                div.appendChild(img);
+            } else {
+                div.innerHTML = `<div class="w-full h-full bg-slate-100 flex items-center justify-center text-xs text-slate-400 text-center px-1 break-all">PDF</div>`;
+            }
+            preview.appendChild(div);
+        };
+        reader.readAsDataURL(file);
+    });
+}
+
+// ==================== 保存记录 (修复版) ====================
+async function saveRecord() {
+    console.log('💾 开始保存记录...');
+    
+    const clientInputs = document.querySelectorAll('.client-name');
+    const clients = Array.from(clientInputs)
+        .map(input => input.value.trim())
+        .filter(name => name);
+
+    // 同步新客户到云端
+    await syncClientsToCloud(clients); 
+
+    const startMileage = parseFloat(document.getElementById('startMileage').value) || 0;
+    const endMileage = parseFloat(document.getElementById('endMileage').value) || 0;
+    const mileage = parseFloat(document.getElementById('mileage').value) || 0; // 使用自动计算后的值
+    
+    const fuelSubsidy = mileage * currentSettings.fuelPricePerKm;
+
+    const Expense = AV.Object.extend('Expense');
+    let expense;
+
+    if (editingId) {
+        // 修改旧记录
+        expense = AV.Object.createWithoutData('Expense', editingId);
+    } else {
+        // 新增记录
+        expense = new Expense();
+    }
+
+    expense.set('date', document.getElementById('recordDate').value);
+    
+    // 保存里程数据
+    expense.set('startMileage', startMileage);
+    expense.set('endMileage', endMileage);
+    expense.set('mileage', mileage);
+    
+    expense.set('clients', clients);
+    expense.set('tollFee', parseFloat(document.getElementById('tollFee').value) || 0);
+    expense.set('parkingFee', parseFloat(document.getElementById('parkingFee').value) || 0);
+    expense.set('trainFee', parseFloat(document.getElementById('trainFee').value) || 0);
+    expense.set('driverFee', parseFloat(document.getElementById('driverFee').value) || 0);
+    expense.set('hotelFee', parseFloat(document.getElementById('hotelFee').value) || 0);
+    expense.set('entertainmentFee', parseFloat(document.getElementById('entertainmentFee').value) || 0);
+    expense.set('taxiFee', parseFloat(document.getElementById('taxiFee').value) || 0);
+    expense.set('fuelSubsidy', fuelSubsidy);
+
+    // 处理图片
+    if (uploadedFiles.length > 0) {
+        const avFiles = uploadedFiles.map(f => new AV.File(f.name, { base64: f.data }));
+        expense.set('receipts', avFiles);
+    }
+
+    // === 关键修复：设置 ACL 权限 ===
+    const currentUser = AV.User.current();
+    if (currentUser) {
+        const acl = new AV.ACL();
+        acl.setPublicReadAccess(false); // 禁止其他人查看
+        acl.setWriteAccess(currentUser, true); // 允许自己修改
+        acl.setReadAccess(currentUser, true); // 允许自己查看
+        expense.setACL(acl);
+    }
+
+    try {
+        await expense.save();
+        alert(editingId ? '✅ 修改成功！' : '✅ 保存成功！');
+        console.log('✅ 已保存到云端');
+        clearForm();
+        loadPrevDayInfo();
+        
+        // 如果是在历史页面修改的，修改完刷新历史列表
+        const historyPage = document.getElementById('page-history');
+        if(!historyPage.classList.contains('hidden')) {
+            loadHistory();
+        }
+    } catch(error) {
+        console.error('❌ 保存失败:', error);
+        alert('⚠️ 保存失败：' + error.message);
+    }
+}
+
+// ==================== 修改记录 (修复版) ====================
+async function editRecord(id) {
+    try {
+        // 1. 从云端获取该条记录的完整数据
+        const query = new AV.Query('Expense');
+        const record = await query.get(id);
+
+        // 2. 切换到记账页面
+        showTab('entry');
+
+        // 3. 设置全局编辑ID
+        editingId = id;
+
+        // 4. 填充表单数据 (这里修复了之前的错误，应该操作 DOM 而不是 expense 对象)
+        document.getElementById('recordDate').value = record.get('date');
+        
+        // === 填充出发和回程里程 ===
+        document.getElementById('startMileage').value = record.get('startMileage') || 0;
+        document.getElementById('endMileage').value = record.get('endMileage') || 0;
+
+        // 重新计算一次总里程显示
+        calculateTotalMileage();
+
+        // 填充客户列表
+        const clients = record.get('clients') || [];
+        const container = document.getElementById('clientsContainer');
+        container.innerHTML = ''; // 先清空现有的
+        clientCount = 0;
+        
+        if (clients.length > 0) {
+            clients.forEach(c => {
+                addClientField(); // 动态添加输入框
+                const inputs = container.querySelectorAll('.client-name');
+                inputs[inputs.length - 1].value = c; // 填入值
+            });
+        } else {
+            addClientField(); // 如果没有客户，至少留一个空框
+        }
+
+        // 填充费用
+        document.getElementById('tollFee').value = record.get('tollFee') || 0;
+        document.getElementById('parkingFee').value = record.get('parkingFee') || 0;
+        document.getElementById('trainFee').value = record.get('trainFee') || 0;
+        document.getElementById('driverFee').value = record.get('driverFee') || 0;
+        document.getElementById('hotelFee').value = record.get('hotelFee') || 0;
+        document.getElementById('entertainmentFee').value = record.get('entertainmentFee') || 0;
+        document.getElementById('taxiFee').value = record.get('taxiFee') || 0;
+
+        // 清空文件上传区
+        document.getElementById('receipts').value = '';
+        document.getElementById('filePreview').innerHTML = '';
+        uploadedFiles = [];
+        
+    } catch (error) {
+        console.error('加载记录失败:', error);
+        alert('加载失败: ' + error.message);
+    }
+}
+
+
+// ==================== 清空表单 ====================
+function clearForm() {
+	editingId = null; 
+    document.getElementById('mileage').value = '';
+    document.getElementById('clientsContainer').innerHTML = '';
+    clientCount = 0;
+    addClientField();
+    
+    ['tollFee', 'parkingFee', 'trainFee', 'driverFee', 
+     'hotelFee', 'entertainmentFee', 'taxiFee'].forEach(id => {
+        document.getElementById(id).value = '0';
+    });
+    
+    document.getElementById('receipts').value = '';
+    document.getElementById('filePreview').innerHTML = '';
+    uploadedFiles = [];
+    calculateFuelSubsidy();
+}
+
+// ==================== 获取所有记录 (辅助函数) ====================
+async function getAllRecords() {
+    const query = new AV.Query('Expense');
+    query.descending('date');
+    query.limit(1000);
+    
+    // 【关键修复】强制包含 receipts 数组中的文件详情，否则只有指针没有 URL
+    query.include('receipts'); 
+    
+    return await query.find();
+}
+
+
+// ==================== 加载历史记录 ====================
+async function loadHistory() {
+    console.log('📊 加载历史记录...');
+    
+    const monthFilter = document.getElementById('monthFilter').value;
+    const listDiv = document.getElementById('historyList');
+    listDiv.innerHTML = '<div class="flex justify-center py-10"><div class="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div></div>';
+    
+    try {
+        // 这里会自动使用上面修改过的 getAllRecords (包含 include)
+        const results = await getAllRecords();
+        
+        let filteredResults = results;
+        if(monthFilter) {
+            filteredResults = results.filter(obj => obj.get('date').startsWith(monthFilter));
+        }
+        
+        if(filteredResults.length === 0) {
+            listDiv.innerHTML = '<div class="text-center py-10 text-slate-400">暂无记录 🍃</div>';
+            return;
+        }
+
+        listDiv.innerHTML = filteredResults.map(obj => {
+            const record = {
+                id: obj.id,
+                date: obj.get('date'),
+                mileage: obj.get('mileage') || 0,
+                clients: obj.get('clients') || [],
+                fuelSubsidy: obj.get('fuelSubsidy') || 0,
+                tollFee: obj.get('tollFee') || 0,
+                parkingFee: obj.get('parkingFee') || 0,
+                trainFee: obj.get('trainFee') || 0,
+                driverFee: obj.get('driverFee') || 0,
+                hotelFee: obj.get('hotelFee') || 0,
+                entertainmentFee: obj.get('entertainmentFee') || 0,
+                taxiFee: obj.get('taxiFee') || 0
+            };
+            
+            const total = record.fuelSubsidy + record.tollFee + record.parkingFee +
+                         record.trainFee + record.driverFee + record.hotelFee +
+                         record.entertainmentFee + record.taxiFee;
+
+            // === 图片处理逻辑 (最终稳健版) ===
+            const receipts = obj.get('receipts') || [];
+            let receiptImagesHtml = '';
+
+            if (receipts.length > 0) {
+                receiptImagesHtml = `
+                    <div class="flex gap-2 mt-3 overflow-x-auto pb-1 no-scrollbar">
+                        ${receipts.map(file => {
+                            let url = '';
+                            
+                            // 打印整个文件对象，方便我们在控制台查看
+                            console.log('🔍 图片对象详情:', file);
+
+                            try {
+                                // 1. 尝试 AV.File 标准方法 (include 后通常能用这个)
+                                if (typeof file.url === 'function') {
+                                    url = file.url();
+                                }
+                                // 2. 尝试 attributes.url (如果还是 AV.Object 结构)
+                                else if (file.attributes && file.attributes.url) {
+                                    url = file.attributes.url;
+                                }
+                                // 3. 尝试 _serverData.url (兜底)
+                                else if (file._serverData && file._serverData.url) {
+                                    url = file._serverData.url;
+                                }
+                                // 4. 尝试 toJSON()
+                                else if (typeof file.toJSON === 'function') {
+                                    const json = file.toJSON();
+                                    if (json.url) url = json.url;
+                                }
+                            } catch (e) {
+                                console.error('获取URL异常:', e);
+                            }
+
+                            if (url) {
+                                return `
+                                    <img src="${url}" 
+                                         class="w-16 h-16 rounded-lg object-cover border border-slate-200 flex-shrink-0 cursor-pointer hover:opacity-80 transition-opacity"
+                                         onclick="window.open('${url}')"
+                                         title="点击查看大图">
+                                `;
+                            } else {
+                                // 还是没找到？把对象的 JSON 字符串打印到控制台
+                                console.error('❌ 彻底失败，对象JSON:', JSON.stringify(file));
+                                return `
+                                    <div class="w-16 h-16 rounded-lg bg-slate-100 border border-slate-200 flex items-center justify-center text-slate-400 flex-shrink-0">
+                                        ?
+                                    </div>
+                                `;
+                            }
+                        }).join('')}
+                    </div>
+                `;
+            }
+
+            return `
+                <div class="bg-surface p-4 rounded-2xl shadow-sm border border-slate-100 relative overflow-hidden group">
+                    <div class="flex justify-between items-start mb-3">
+                        <div>
+                            <div class="text-xs text-slate-400 font-medium mb-1">${record.date}</div>
+                            <div class="text-sm text-slate-600 flex items-center gap-1">
+                                <span>🚗 ${record.mileage}km</span>
+                                ${record.clients.length > 0 ? `<span class="bg-slate-100 px-2 py-0.5 rounded text-xs text-slate-500">${record.clients[0]}${record.clients.length>1?'等':''}</span>` : ''}
+                            </div>
+                        </div>
+                        <div class="text-right">
+                            <div class="text-lg font-bold text-slate-900">¥${total.toFixed(2)}</div>
+                        </div>
+                    </div>
+                    
+                    <div class="flex flex-wrap gap-x-3 gap-y-1 text-xs text-slate-400 mt-2 pt-2 border-t border-dashed border-slate-100">
+                        ${record.tollFee > 0 ? `<span>过路¥${record.tollFee}</span>` : ''}
+                        ${record.parkingFee > 0 ? `<span>停车¥${record.parkingFee}</span>` : ''}
+                        ${record.trainFee > 0 ? `<span>高铁¥${record.trainFee}</span>` : ''}
+                        ${record.hotelFee > 0 ? `<span>住宿¥${record.hotelFee}</span>` : ''}
+                        ${record.entertainmentFee > 0 ? `<span>招待¥${record.entertainmentFee}</span>` : ''}
+                    </div>
+                    
+                    ${receiptImagesHtml}
+
+                    <div class="mt-3 flex justify-end gap-2">
+                        <button onclick="editRecord('${record.id}')" class="text-xs px-3 py-1 bg-indigo-50 text-indigo-600 rounded hover:bg-indigo-100 font-medium">
+                            修改
+                        </button>
+                        <button onclick="deleteRecord('${record.id}')" class="text-slate-300 hover:text-red-500 transition-colors p-1">
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
+                        </button>
+                    </div>
+                </div>
+            `;
+        }).join('');
+        
+    } catch(error) {
+        console.error('❌ 加载失败:', error);
+        listDiv.innerHTML = `<p class="text-red-500 text-center py-10">加载失败：${error.message}</p>`;
+    }
+}
+
+// ==================== 清空所有数据 ====================
+async function clearAllData() {
+    if(!confirm('⚠️ 确定要清空所有数据吗？此操作不可恢复！')) return;
+    if(!confirm('⚠️ 再次确认：真的要删除所有记账记录吗？')) return;
+    
+    try {
+        const results = await getAllRecords();
+        if(results.length === 0) {
+            alert('当前没有数据可清除');
+            return;
+        }
+        await AV.Object.destroyAll(results);
+        alert('✅ 数据已清空');
+        loadHistory();
+    } catch(error) {
+        console.error('清空失败:', error);
+        alert('清空失败：' + error.message);
+    }
+}
+
+// ==================== 生成月份选项 ====================
+function generateMonthOptions() {
+    const select = document.getElementById('monthFilter');
+    const now = new Date();
+    
+    for(let i = 0; i < 12; i++) {
+        const date = new Date(now.getFullYear(), now.getMonth() - i, 1);
+        const value = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+        const option = document.createElement('option');
+        option.value = value;
+        option.textContent = `${date.getFullYear()}年${date.getMonth() + 1}月`;
+        select.appendChild(option);
+    }
+}
+
+// ==================== 汇总统计 ====================
+function loadSummary() {
+    const monthInput = document.getElementById('exportMonth');
+    const now = new Date();
+    monthInput.value = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+    calculateSummary();
+}
+
+async function calculateSummary() {
+    const monthValue = document.getElementById('exportMonth').value;
+    const records = await getAllRecords();
+    
+    const monthRecords = records.filter(r => r.get('date').startsWith(monthValue));
+    
+    let summary = {
+        count: monthRecords.length,
+        totalMileage: 0,
+        totalFuelSubsidy: 0,
+        totalTollFee: 0,
+        totalParkingFee: 0,
+        totalTrainFee: 0,
+        totalDriverFee: 0,
+        totalHotelFee: 0,
+        totalEntertainmentFee: 0,
+        totalTaxiFee: 0
+    };
+
+    monthRecords.forEach(r => {
+        summary.totalMileage += r.get('mileage') || 0;
+        summary.totalFuelSubsidy += r.get('fuelSubsidy') || 0;
+        summary.totalTollFee += r.get('tollFee') || 0;
+        summary.totalParkingFee += r.get('parkingFee') || 0;
+        summary.totalTrainFee += r.get('trainFee') || 0;
+        summary.totalDriverFee += r.get('driverFee') || 0;
+        summary.totalHotelFee += r.get('hotelFee') || 0;
+        summary.totalEntertainmentFee += r.get('entertainmentFee') || 0;
+        summary.totalTaxiFee += r.get('taxiFee') || 0;
+    });
+
+    const grandTotal = summary.totalFuelSubsidy + summary.totalTollFee + 
+                      summary.totalParkingFee + summary.totalTrainFee + 
+                      summary.totalDriverFee + summary.totalHotelFee + 
+                      summary.totalEntertainmentFee + summary.totalTaxiFee;
+
+    document.getElementById('summaryDisplay').innerHTML = `
+        <div class="grid grid-cols-2 gap-3 text-sm">
+            <div class="bg-slate-50 p-3 rounded-xl">
+                <div class="text-xs text-slate-400">记录天数</div>
+                <div class="font-bold text-slate-700">${summary.count}天</div>
+            </div>
+            <div class="bg-slate-50 p-3 rounded-xl">
+                <div class="text-xs text-slate-400">总里程</div>
+                <div class="font-bold text-slate-700">${summary.totalMileage}km</div>
+            </div>
+            <div class="bg-slate-50 p-3 rounded-xl">
+                <div class="text-xs text-slate-400">油补合计</div>
+                <div class="font-bold text-slate-700">¥${summary.totalFuelSubsidy.toFixed(2)}</div>
+            </div>
+            <div class="bg-slate-50 p-3 rounded-xl">
+                <div class="text-xs text-slate-400">过路费</div>
+                <div class="font-bold text-slate-700">¥${summary.totalTollFee.toFixed(2)}</div>
+            </div>
+            <div class="bg-slate-50 p-3 rounded-xl">
+                <div class="text-xs text-slate-400">停车费</div>
+                <div class="font-bold text-slate-700">¥${summary.totalParkingFee.toFixed(2)}</div>
+            </div>
+            <div class="bg-slate-50 p-3 rounded-xl">
+                <div class="text-xs text-slate-400">高铁费</div>
+                <div class="font-bold text-slate-700">¥${summary.totalTrainFee.toFixed(2)}</div>
+            </div>
+            <div class="bg-slate-50 p-3 rounded-xl">
+                <div class="text-xs text-slate-400">代驾费</div>
+                <div class="font-bold text-slate-700">¥${summary.totalDriverFee.toFixed(2)}</div>
+            </div>
+            <div class="bg-slate-50 p-3 rounded-xl">
+                <div class="text-xs text-slate-400">住宿费</div>
+                <div class="font-bold text-slate-700">¥${summary.totalHotelFee.toFixed(2)}</div>
+            </div>
+            <div class="bg-slate-50 p-3 rounded-xl">
+                <div class="text-xs text-slate-400">招待费</div>
+                <div class="font-bold text-slate-700">¥${summary.totalEntertainmentFee.toFixed(2)}</div>
+            </div>
+            <div class="bg-slate-50 p-3 rounded-xl">
+                <div class="text-xs text-slate-400">打车费</div>
+                <div class="font-bold text-slate-700">¥${summary.totalTaxiFee.toFixed(2)}</div>
+            </div>
+            <div class="col-span-2 bg-indigo-50 p-4 rounded-xl border border-indigo-100 mt-2">
+                <div class="text-xs text-indigo-400 mb-1">本月总计报销</div>
+                <div class="text-2xl font-bold text-indigo-600">¥${grandTotal.toFixed(2)}</div>
+            </div>
+        </div>
+    `;
+}
+
+// ==================== 导出Excel ====================
+async function exportToExcel() {
+    const monthValue = document.getElementById('exportMonth').value;
+    const records = await getAllRecords();
+    const monthRecords = records.filter(r => r.get('date').startsWith(monthValue))
+                               .sort((a, b) => new Date(a.get('date')) - new Date(b.get('date')));
+    
+    if(monthRecords.length === 0) {
+        alert('该月份暂无数据');
+        return;
+    }
+
+    const data = monthRecords.map(r => {
+        const clients = (r.get('clients') || []).join('、');
+        const startMileage = r.get('startMileage') || 0;
+        const endMileage = r.get('endMileage') || 0;
+        const fuelSubsidy = r.get('fuelSubsidy') || 0;
+        const tollFee = r.get('tollFee') || 0;
+        const parkingFee = r.get('parkingFee') || 0;
+        const trainFee = r.get('trainFee') || 0;
+        const driverFee = r.get('driverFee') || 0;
+        const hotelFee = r.get('hotelFee') || 0;
+        const entertainmentFee = r.get('entertainmentFee') || 0;
+        const taxiFee = r.get('taxiFee') || 0;
+        // 计算小计（使用数据库存的 mileage，或者重新算 start-end 也可以）
+        const totalMileage = r.get('mileage') || 0; 
+        
+        return {
+    '日期': new Date(r.get('date')).toLocaleDateString('zh-CN'),
+    '出发公里数': startMileage,
+    '回程公里数': endMileage,
+    '公里数': totalMileage, // 这里的 totalMileage 就是差值
+    // 删掉下面这行重复的 '公里数'
+    // '公里数': r.get('mileage') || 0, 
+    '拜访客户': clients,
+    '油补': fuelSubsidy,
+    '过路费': tollFee,
+    '停车费': parkingFee,
+    '高铁费': trainFee,
+    '代驾费': driverFee,
+    '住宿费': hotelFee,
+    '招待费': entertainmentFee,
+    '打车费': taxiFee,
+    '小计': fuelSubsidy + tollFee + parkingFee + trainFee + driverFee + hotelFee + entertainmentFee + taxiFee
+};
+
+    });
+
+    const ws = XLSX.utils.json_to_sheet(data);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "报销明细");
+    
+    const [year, month] = monthValue.split('-');
+    XLSX.writeFile(wb, `报销记录_${year}年${month}月.xlsx`);
+    
+    console.log('✅ Excel导出成功');
+}
+
+// ==================== 设置管理 ====================
+function loadSettings() {
+    const settings = getFromStorage('settings');
+    if(settings) {
+        currentSettings = settings;
+    }
+    document.getElementById('fuelPrice').value = currentSettings.fuelPricePerKm;
+    calculateFuelSubsidy();
+}
+
+function saveSettings() {
+    const fuelPrice = parseFloat(document.getElementById('fuelPrice').value);
+    
+    if(isNaN(fuelPrice) || fuelPrice <= 0) {
+        alert('请输入有效的油补单价');
+        return;
+    }
+    
+    currentSettings.fuelPricePerKm = fuelPrice;
+    saveToStorage('settings', currentSettings);
+    
+    alert('✅ 设置保存成功！');
+    calculateFuelSubsidy();
+}
+// ==================== 年度统计逻辑 ====================
+async function loadAnnualStatistics() {
+    const yearSelect = document.getElementById('yearFilter');
+    const now = new Date();
+    const currentYear = now.getFullYear();
+    
+    // 1. 初始化或生成年份选项 (只做一次)
+    if(yearSelect.options.length === 0) {
+        for(let i = 0; i < 5; i++) {
+            const year = currentYear - i;
+            const option = document.createElement('option');
+            option.value = year;
+            option.textContent = `${year}年`;
+            yearSelect.appendChild(option);
+        }
+    }
+
+    const selectedYear = yearSelect.value || currentYear;
+    const records = await getAllRecords();
+    
+    // 2. 筛选当年数据
+    const yearRecords = records.filter(r => r.get('date').startsWith(selectedYear.toString()));
+    
+    // 3. 计算总和
+    let summary = {
+        count: yearRecords.length,
+        totalMileage: 0,
+        totalFuelSubsidy: 0,
+        totalTollFee: 0,
+        totalParkingFee: 0,
+        totalTrainFee: 0,
+        totalDriverFee: 0,
+        totalHotelFee: 0,
+        totalEntertainmentFee: 0,
+        totalTaxiFee: 0
+    };
+
+    yearRecords.forEach(r => {
+        summary.totalMileage += r.get('mileage') || 0;
+        summary.totalFuelSubsidy += r.get('fuelSubsidy') || 0;
+        summary.totalTollFee += r.get('tollFee') || 0;
+        summary.totalParkingFee += r.get('parkingFee') || 0;
+        summary.totalTrainFee += r.get('trainFee') || 0;
+        summary.totalDriverFee += r.get('driverFee') || 0;
+        summary.totalHotelFee += r.get('hotelFee') || 0;
+        summary.totalEntertainmentFee += r.get('entertainmentFee') || 0;
+        summary.totalTaxiFee += r.get('taxiFee') || 0;
+    });
+
+    const grandTotal = summary.totalFuelSubsidy + summary.totalTollFee + 
+                      summary.totalParkingFee + summary.totalTrainFee + 
+                      summary.totalDriverFee + summary.totalHotelFee + 
+                      summary.totalEntertainmentFee + summary.totalTaxiFee;
+
+    // 4. 更新UI
+    document.getElementById('yearTotalDisplay').textContent = `¥${grandTotal.toFixed(2)}`;
+    
+    document.getElementById('yearSummaryDisplay').innerHTML = `
+        <div class="grid grid-cols-2 gap-3 text-sm">
+            <div class="bg-slate-50 p-3 rounded-xl flex justify-between items-center">
+                <span class="text-slate-500 text-xs">记录天数</span>
+                <span class="font-bold text-slate-700">${summary.count}天</span>
+            </div>
+            <div class="bg-slate-50 p-3 rounded-xl flex justify-between items-center">
+                <span class="text-slate-500 text-xs">总里程</span>
+                <span class="font-bold text-slate-700">${summary.totalMileage}km</span>
+            </div>
+            
+            <div class="col-span-2 border-t border-slate-100 my-1"></div>
+            
+            <div class="bg-slate-50 p-3 rounded-xl flex justify-between items-center">
+                <span class="text-slate-500 text-xs">油补</span>
+                <span class="font-bold text-slate-700">¥${summary.totalFuelSubsidy.toFixed(2)}</span>
+            </div>
+            <div class="bg-slate-50 p-3 rounded-xl flex justify-between items-center">
+                <span class="text-slate-500 text-xs">过路费</span>
+                <span class="font-bold text-slate-700">¥${summary.totalTollFee.toFixed(2)}</span>
+            </div>
+            <div class="bg-slate-50 p-3 rounded-xl flex justify-between items-center">
+                <span class="text-slate-500 text-xs">停车费</span>
+                <span class="font-bold text-slate-700">¥${summary.totalParkingFee.toFixed(2)}</span>
+            </div>
+            <div class="bg-slate-50 p-3 rounded-xl flex justify-between items-center">
+                <span class="text-slate-500 text-xs">高铁费</span>
+                <span class="font-bold text-slate-700">¥${summary.totalTrainFee.toFixed(2)}</span>
+            </div>
+            <div class="bg-slate-50 p-3 rounded-xl flex justify-between items-center">
+                <span class="text-slate-500 text-xs">住宿费</span>
+                <span class="font-bold text-slate-700">¥${summary.totalHotelFee.toFixed(2)}</span>
+            </div>
+            <div class="bg-slate-50 p-3 rounded-xl flex justify-between items-center">
+                <span class="text-slate-500 text-xs">招待费</span>
+                <span class="font-bold text-slate-700">¥${summary.totalEntertainmentFee.toFixed(2)}</span>
+            </div>
+            <div class="bg-slate-50 p-3 rounded-xl flex justify-between items-center col-span-2">
+                <span class="text-slate-500 text-xs">其他(代驾/打车)</span>
+                <span class="font-bold text-slate-700">¥${(summary.totalDriverFee + summary.totalTaxiFee).toFixed(2)}</span>
+            </div>
+        </div>
+    `;
+}
+
+console.log('✅ 所有函数定义完成');
+    </script>
+</body>
+</html>
