@@ -208,31 +208,31 @@
                     <div class="grid grid-cols-2 gap-4">
                         <div class="space-y-1">
                             <label class="text-xs text-slate-500">过路费</label>
-                            <input type="number" id="tollFee" class="w-full bg-slate-50 rounded-lg px-3 py-2 text-sm font-medium outline-none focus:ring-1 focus:ring-primary" value="0" step="0.01">
+                            <input type="number" id="tollFee" class="w-full bg-slate-50 rounded-lg px-3 py-2 text-sm font-medium outline-none focus:ring-1 focus:ring-primary" value="" step="0.01">
                         </div>
                         <div class="space-y-1">
                             <label class="text-xs text-slate-500">停车费</label>
-                            <input type="number" id="parkingFee" class="w-full bg-slate-50 rounded-lg px-3 py-2 text-sm font-medium outline-none focus:ring-1 focus:ring-primary" value="0" step="0.01">
+                            <input type="number" id="parkingFee" class="w-full bg-slate-50 rounded-lg px-3 py-2 text-sm font-medium outline-none focus:ring-1 focus:ring-primary" value="" step="0.01">
                         </div>
                         <div class="space-y-1">
                             <label class="text-xs text-slate-500">高铁费</label>
-                            <input type="number" id="trainFee" class="w-full bg-slate-50 rounded-lg px-3 py-2 text-sm font-medium outline-none focus:ring-1 focus:ring-primary" value="0" step="0.01">
+                            <input type="number" id="trainFee" class="w-full bg-slate-50 rounded-lg px-3 py-2 text-sm font-medium outline-none focus:ring-1 focus:ring-primary" value="" step="0.01">
                         </div>
                         <div class="space-y-1">
                             <label class="text-xs text-slate-500">代驾费</label>
-                            <input type="number" id="driverFee" class="w-full bg-slate-50 rounded-lg px-3 py-2 text-sm font-medium outline-none focus:ring-1 focus:ring-primary" value="0" step="0.01">
+                            <input type="number" id="driverFee" class="w-full bg-slate-50 rounded-lg px-3 py-2 text-sm font-medium outline-none focus:ring-1 focus:ring-primary" value="" step="0.01">
                         </div>
                         <div class="space-y-1">
                             <label class="text-xs text-slate-500">住宿费</label>
-                            <input type="number" id="hotelFee" class="w-full bg-slate-50 rounded-lg px-3 py-2 text-sm font-medium outline-none focus:ring-1 focus:ring-primary" value="0" step="0.01">
+                            <input type="number" id="hotelFee" class="w-full bg-slate-50 rounded-lg px-3 py-2 text-sm font-medium outline-none focus:ring-1 focus:ring-primary" value="" step="0.01">
                         </div>
                         <div class="space-y-1">
                             <label class="text-xs text-slate-500">招待费</label>
-                            <input type="number" id="entertainmentFee" class="w-full bg-slate-50 rounded-lg px-3 py-2 text-sm font-medium outline-none focus:ring-1 focus:ring-primary" value="0" step="0.01">
+                            <input type="number" id="entertainmentFee" class="w-full bg-slate-50 rounded-lg px-3 py-2 text-sm font-medium outline-none focus:ring-1 focus:ring-primary" value="" step="0.01">
                         </div>
                         <div class="space-y-1 col-span-2">
                             <label class="text-xs text-slate-500">打车费</label>
-                            <input type="number" id="taxiFee" class="w-full bg-slate-50 rounded-lg px-3 py-2 text-sm font-medium outline-none focus:ring-1 focus:ring-primary" value="0" step="0.01">
+                            <input type="number" id="taxiFee" class="w-full bg-slate-50 rounded-lg px-3 py-2 text-sm font-medium outline-none focus:ring-1 focus:ring-primary" value="" step="0.01">
                         </div>
                     </div>
                 </div>
@@ -320,7 +320,7 @@
                     </div>
                     <div>
                         <p class="text-sm font-bold text-emerald-800">云端同步已开启</p>
-                        <p class="text-xs text-emerald-600 mt-1">数据实时保存至 LeanCloud，换设备不丢失。</p>
+                        <p class="text-xs text-emerald-600 mt-1">数据实时保存至Cloud，换设备不丢失。</p>
                     </div>
                 </div>
             </div>
@@ -796,6 +796,56 @@ async function saveRecord() {
     const mileage = parseFloat(document.getElementById('mileage').value) || 0; // 使用自动计算后的值
     
     const fuelSubsidy = mileage * currentSettings.fuelPricePerKm;
+    // ==================== 新增：当天数据累加逻辑 ====================
+    let existingRecord = null; // 用于暂存找到的当天旧记录
+
+    // 只有在新增模式（非修改旧记录）时才检查累加
+    if (!editingId) {
+        const query = new AV.Query('Expense');
+        query.equalTo('date', document.getElementById('recordDate').value);
+        query.equalTo('owner', AV.User.current());
+        query.include('receipts'); // 同时把旧图片也查出来
+        
+        existingRecord = await query.first();
+
+        if (existingRecord) {
+            // 1. 如果发现当天已有记录，强制切换为“修改模式”
+            editingId = existingRecord.id;
+            
+            // 2. 费用累加：读取数据库旧值 + 当前输入新值，并更新回输入框
+            const feeFields = ['tollFee', 'parkingFee', 'trainFee', 'driverFee', 'hotelFee', 'entertainmentFee', 'taxiFee'];
+            feeFields.forEach(field => {
+                const oldVal = existingRecord.get(field) || 0;
+                const inputElem = document.getElementById(field);
+                const newVal = parseFloat(inputElem.value) || 0;
+                inputElem.value = (oldVal + newVal).toFixed(2); // 更新页面上的数字
+            });
+
+            // 3. 里程累加：取最小的出发里程 和 最大的回程里程
+            const oldStart = existingRecord.get('startMileage') || 0;
+            const oldEnd = existingRecord.get('endMileage') || 0;
+            const currentStart = parseFloat(document.getElementById('startMileage').value) || 0;
+            const currentEnd = parseFloat(document.getElementById('endMileage').value) || 0;
+
+            document.getElementById('startMileage').value = Math.min(oldStart, currentStart);
+            document.getElementById('endMileage').value = Math.max(oldEnd, currentEnd);
+            
+            // 重新触发一次里程计算，确保总里程和油补是正确的
+            calculateTotalMileage();
+
+            // 4. 客户合并：将旧客户和新客户合并去重
+            const oldClients = existingRecord.get('clients') || [];
+            // clients 是你上面代码里已经获取到的当前输入客户数组
+            // 这里直接覆盖 clients 变量，让后面保存时用到的是合并后的数组
+            // 注意：这行代码必须放在你获取 clients 变量的代码之后
+            if (typeof clients !== 'undefined') {
+                // 使用 Set 去重合并
+                const mergedSet = new Set([...oldClients, ...clients]);
+                clients = Array.from(mergedSet);
+            }
+        }
+    }
+    // ==================== 累加逻辑结束 ====================
 
     const Expense = AV.Object.extend('Expense');
     let expense;
@@ -825,11 +875,22 @@ async function saveRecord() {
     expense.set('taxiFee', parseFloat(document.getElementById('taxiFee').value) || 0);
     expense.set('fuelSubsidy', fuelSubsidy);
 
-    // 处理图片
+     // ==================== 修改：图片追加逻辑 ====================
     if (uploadedFiles.length > 0) {
-        const avFiles = uploadedFiles.map(f => new AV.File(f.name, { base64: f.data }));
-        expense.set('receipts', avFiles);
+        const newAvFiles = uploadedFiles.map(f => new AV.File(f.name, { base64: f.data }));
+        
+        // 如果是累加模式（即 existingRecord 存在），需要把旧图片也加进来
+        if (existingRecord) {
+            const oldReceipts = existingRecord.get('receipts') || [];
+            // 将旧图片数组和新图片数组合并
+            expense.set('receipts', [...oldReceipts, ...newAvFiles]);
+        } else {
+            // 普通新增模式，直接保存新图片
+            expense.set('receipts', newAvFiles);
+        }
     }
+    // ==================== 图片逻辑结束 ====================
+
 
     // === 关键修复：设置 ACL 权限 ===
     const currentUser = AV.User.current();
@@ -917,6 +978,30 @@ async function editRecord(id) {
         alert('加载失败: ' + error.message);
     }
 }
+// ==================== 删除记录 ====================
+async function deleteRecord(id) {
+    // 弹出确认框
+    if(!confirm('确定要删除这条记录吗？此操作无法撤销。')) {
+        return;
+    }
+
+    try {
+        // 1. 根据ID创建一个对象指针
+        const record = AV.Object.createWithoutData('Expense', id);
+        
+        // 2. 执行删除
+        await record.destroy();
+        
+        alert('✅ 删除成功');
+        
+        // 3. 刷新历史列表
+        loadHistory();
+        
+    } catch (error) {
+        console.error('❌ 删除失败:', error);
+        alert('⚠️ 删除失败：' + error.message);
+    }
+}
 
 
 // ==================== 清空表单 ====================
@@ -929,7 +1014,7 @@ function clearForm() {
     
     ['tollFee', 'parkingFee', 'trainFee', 'driverFee', 
      'hotelFee', 'entertainmentFee', 'taxiFee'].forEach(id => {
-        document.getElementById(id).value = '0';
+        document.getElementById(id).value = '';
     });
     
     document.getElementById('receipts').value = '';
