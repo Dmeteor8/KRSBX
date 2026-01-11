@@ -148,7 +148,8 @@
                 <!-- 日期卡片 -->
                 <div class="bg-surface p-5 rounded-2xl shadow-soft border border-slate-100">
                     <label class="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">日期</label>
-                    <input type="date" id="recordDate" class="w-full bg-slate-50 border-none rounded-xl px-4 py-3 text-slate-700 font-medium focus:ring-2 focus:ring-primary/20 outline-none" onchange="loadPrevDayInfo()">
+                    <!-- 原来的 onchange="loadPrevDayInfo()" 改为下面的 -->
+                    <input type="date" id="recordDate" class="w-full bg-slate-50 border-none rounded-xl px-4 py-3 text-slate-700 font-medium focus:ring-2 focus:ring-primary/20 outline-none" onchange="loadDataForSelectedDate()">
                     <div id="prevDayInfo" class="mt-3 text-xs text-indigo-500 bg-indigo-50 p-2 rounded-lg flex items-center gap-1">
                         <!-- 动态内容 -->
                     </div>
@@ -538,6 +539,8 @@ let currentSettings = { fuelPricePerKm: 1 };
 let clientCount = 0;
 let uploadedFiles = [];
 let editingId = null; // 用于记录正在编辑的记录ID，null表示新增
+let isOverwriteMode = false; // 新增：false=追加模式(记账页), true=覆盖模式(历史修改)
+
 // ==================== 全局变量 (新增) ====================
 // 使用 Set 存储客户名，自动去重，方便快速查找
 let knownClients = new Set(); 
@@ -779,126 +782,148 @@ function previewFiles() {
     });
 }
 
-// ==================== 保存记录 (修复版) ====================
+// ==================== 保存记录 (修复 Owner 遗漏版) ====================
 async function saveRecord() {
     console.log('💾 开始保存记录...');
     
+    // 1. 先处理客户数据
     const clientInputs = document.querySelectorAll('.client-name');
-    const clients = Array.from(clientInputs)
+    let clients = Array.from(clientInputs)
         .map(input => input.value.trim())
         .filter(name => name);
-
-    // 同步新客户到云端
     await syncClientsToCloud(clients); 
 
-    const startMileage = parseFloat(document.getElementById('startMileage').value) || 0;
-    const endMileage = parseFloat(document.getElementById('endMileage').value) || 0;
-    const mileage = parseFloat(document.getElementById('mileage').value) || 0; // 使用自动计算后的值
-    
-    const fuelSubsidy = mileage * currentSettings.fuelPricePerKm;
-    // ==================== 新增：当天数据累加逻辑 ====================
-    let existingRecord = null; // 用于暂存找到的当天旧记录
+        // 2. 定义变量
+    let startMileage, endMileage, mileage, fuelSubsidy;
+    let existingRecord = null;
 
-    // 只有在新增模式（非修改旧记录）时才检查累加
-    if (!editingId) {
+    // 3. 统一逻辑：查找旧记录
+    // 如果有 editingId，说明是从历史记录点进来的，根据 ID 查
+    if (editingId) {
+        const query = new AV.Query('Expense');
+        existingRecord = await query.get(editingId);
+    } else {
+        // 如果没有 editingId，说明是记账页面，根据日期查
         const query = new AV.Query('Expense');
         query.equalTo('date', document.getElementById('recordDate').value);
         query.equalTo('owner', AV.User.current());
-        query.include('receipts'); // 同时把旧图片也查出来
-        
+        query.include('receipts');
         existingRecord = await query.first();
-
+        
+        // 如果根据日期查到了，把 ID 赋值给 editingId，方便后续保存
         if (existingRecord) {
-            // 1. 如果发现当天已有记录，强制切换为“修改模式”
             editingId = existingRecord.id;
-            
-            // 2. 费用累加：读取数据库旧值 + 当前输入新值，并更新回输入框
-            const feeFields = ['tollFee', 'parkingFee', 'trainFee', 'driverFee', 'hotelFee', 'entertainmentFee', 'taxiFee'];
-            feeFields.forEach(field => {
-                const oldVal = existingRecord.get(field) || 0;
-                const inputElem = document.getElementById(field);
-                const newVal = parseFloat(inputElem.value) || 0;
-                inputElem.value = (oldVal + newVal).toFixed(2); // 更新页面上的数字
-            });
-
-            // 3. 里程累加：取最小的出发里程 和 最大的回程里程
-            const oldStart = existingRecord.get('startMileage') || 0;
-            const oldEnd = existingRecord.get('endMileage') || 0;
-            const currentStart = parseFloat(document.getElementById('startMileage').value) || 0;
-            const currentEnd = parseFloat(document.getElementById('endMileage').value) || 0;
-
-            document.getElementById('startMileage').value = Math.min(oldStart, currentStart);
-            document.getElementById('endMileage').value = Math.max(oldEnd, currentEnd);
-            
-            // 重新触发一次里程计算，确保总里程和油补是正确的
-            calculateTotalMileage();
-
-            // 4. 客户合并：将旧客户和新客户合并去重
-            const oldClients = existingRecord.get('clients') || [];
-            // clients 是你上面代码里已经获取到的当前输入客户数组
-            // 这里直接覆盖 clients 变量，让后面保存时用到的是合并后的数组
-            // 注意：这行代码必须放在你获取 clients 变量的代码之后
-            if (typeof clients !== 'undefined') {
-                // 使用 Set 去重合并
-                const mergedSet = new Set([...oldClients, ...clients]);
-                clients = Array.from(mergedSet);
-            }
         }
     }
-    // ==================== 累加逻辑结束 ====================
 
+    // 4. 如果找到了旧记录，执行累加逻辑 (统一处理)
+    if (existingRecord) {
+        // A. 费用累加：只计算用于保存的值，不更新输入框显示
+        // 注意：这里不需要做任何事，因为输入框已经是空的(或新的)，我们在下面保存时直接加就行
+
+        // B. 里程累加：取最小出发，最大回程
+        const oldStart = existingRecord.get('startMileage') || 0;
+        const oldEnd = existingRecord.get('endMileage') || 0;
+        const currentStart = parseFloat(document.getElementById('startMileage').value) || 0;
+        const currentEnd = parseFloat(document.getElementById('endMileage').value) || 0;
+
+        document.getElementById('startMileage').value = Math.min(oldStart, currentStart);
+        document.getElementById('endMileage').value = Math.max(oldEnd, currentEnd);
+        calculateTotalMileage();
+
+        // C. 客户合并
+        const oldClients = existingRecord.get('clients') || [];
+        const clientInputs = document.querySelectorAll('.client-name');
+        let clients = Array.from(clientInputs).map(input => input.value.trim()).filter(name => name);
+        
+        if (typeof clients !== 'undefined') {
+            const mergedSet = new Set([...oldClients, ...clients]);
+            // 更新一下 clients 变量，后面保存要用 (这里需要重新获取一次，因为上面是局部变量)
+            // 为简单起见，我们直接在下面保存时再合并一次
+        }
+    }
+
+
+    // 4. 读取输入框最新值
+    startMileage = parseFloat(document.getElementById('startMileage').value) || 0;
+    endMileage = parseFloat(document.getElementById('endMileage').value) || 0;
+    mileage = parseFloat(document.getElementById('mileage').value) || 0;
+    fuelSubsidy = mileage * currentSettings.fuelPricePerKm;
+
+    // 5. 准备保存对象
     const Expense = AV.Object.extend('Expense');
     let expense;
+    const currentUser = AV.User.current();
 
     if (editingId) {
-        // 修改旧记录
         expense = AV.Object.createWithoutData('Expense', editingId);
     } else {
-        // 新增记录
         expense = new Expense();
     }
 
     expense.set('date', document.getElementById('recordDate').value);
     
-    // 保存里程数据
+    // === 核心修复：保存时必须设置 owner ===
+    expense.set('owner', currentUser); 
+    
     expense.set('startMileage', startMileage);
     expense.set('endMileage', endMileage);
     expense.set('mileage', mileage);
-    
     expense.set('clients', clients);
-    expense.set('tollFee', parseFloat(document.getElementById('tollFee').value) || 0);
-    expense.set('parkingFee', parseFloat(document.getElementById('parkingFee').value) || 0);
-    expense.set('trainFee', parseFloat(document.getElementById('trainFee').value) || 0);
-    expense.set('driverFee', parseFloat(document.getElementById('driverFee').value) || 0);
-    expense.set('hotelFee', parseFloat(document.getElementById('hotelFee').value) || 0);
-    expense.set('entertainmentFee', parseFloat(document.getElementById('entertainmentFee').value) || 0);
-    expense.set('taxiFee', parseFloat(document.getElementById('taxiFee').value) || 0);
-    expense.set('fuelSubsidy', fuelSubsidy);
+    
+        // 保存费用 (如果是累加模式，需要手动算出：旧值 + 输入值)
+        // === 核心逻辑：根据模式决定 累加 还是 覆盖 ===
+    if (existingRecord) {
+        if (isOverwriteMode) {
+            // --- 模式1：覆盖模式 (来自历史修改) ---
+            // 直接保存输入框里的值，不管旧的是多少
+            expense.set('tollFee', parseFloat(document.getElementById('tollFee').value) || 0);
+            expense.set('parkingFee', parseFloat(document.getElementById('parkingFee').value) || 0);
+            expense.set('trainFee', parseFloat(document.getElementById('trainFee').value) || 0);
+            expense.set('driverFee', parseFloat(document.getElementById('driverFee').value) || 0);
+            expense.set('hotelFee', parseFloat(document.getElementById('hotelFee').value) || 0);
+            expense.set('entertainmentFee', parseFloat(document.getElementById('entertainmentFee').value) || 0);
+            expense.set('taxiFee', parseFloat(document.getElementById('taxiFee').value) || 0);
+        } else {
+            // --- 模式2：追加模式 (来自记账页) ---
+            // 旧值 + 输入框的值
+            expense.set('tollFee', (existingRecord.get('tollFee') || 0) + (parseFloat(document.getElementById('tollFee').value) || 0));
+            expense.set('parkingFee', (existingRecord.get('parkingFee') || 0) + (parseFloat(document.getElementById('parkingFee').value) || 0));
+            expense.set('trainFee', (existingRecord.get('trainFee') || 0) + (parseFloat(document.getElementById('trainFee').value) || 0));
+            expense.set('driverFee', (existingRecord.get('driverFee') || 0) + (parseFloat(document.getElementById('driverFee').value) || 0));
+            expense.set('hotelFee', (existingRecord.get('hotelFee') || 0) + (parseFloat(document.getElementById('hotelFee').value) || 0));
+            expense.set('entertainmentFee', (existingRecord.get('entertainmentFee') || 0) + (parseFloat(document.getElementById('entertainmentFee').value) || 0));
+            expense.set('taxiFee', (existingRecord.get('taxiFee') || 0) + (parseFloat(document.getElementById('taxiFee').value) || 0));
+        }
+    } else {
+        // 新记录直接保存
+        expense.set('tollFee', parseFloat(document.getElementById('tollFee').value) || 0);
+        expense.set('parkingFee', parseFloat(document.getElementById('parkingFee').value) || 0);
+        expense.set('trainFee', parseFloat(document.getElementById('trainFee').value) || 0);
+        expense.set('driverFee', parseFloat(document.getElementById('driverFee').value) || 0);
+        expense.set('hotelFee', parseFloat(document.getElementById('hotelFee').value) || 0);
+        expense.set('entertainmentFee', parseFloat(document.getElementById('entertainmentFee').value) || 0);
+        expense.set('taxiFee', parseFloat(document.getElementById('taxiFee').value) || 0);
+    }
 
-     // ==================== 修改：图片追加逻辑 ====================
+
+    // 图片处理
     if (uploadedFiles.length > 0) {
         const newAvFiles = uploadedFiles.map(f => new AV.File(f.name, { base64: f.data }));
-        
-        // 如果是累加模式（即 existingRecord 存在），需要把旧图片也加进来
         if (existingRecord) {
             const oldReceipts = existingRecord.get('receipts') || [];
-            // 将旧图片数组和新图片数组合并
             expense.set('receipts', [...oldReceipts, ...newAvFiles]);
         } else {
-            // 普通新增模式，直接保存新图片
             expense.set('receipts', newAvFiles);
         }
     }
-    // ==================== 图片逻辑结束 ====================
 
-
-    // === 关键修复：设置 ACL 权限 ===
-    const currentUser = AV.User.current();
+    // 权限设置
     if (currentUser) {
         const acl = new AV.ACL();
-        acl.setPublicReadAccess(false); // 禁止其他人查看
-        acl.setWriteAccess(currentUser, true); // 允许自己修改
-        acl.setReadAccess(currentUser, true); // 允许自己查看
+        acl.setPublicReadAccess(false);
+        acl.setWriteAccess(currentUser, true);
+        acl.setReadAccess(currentUser, true);
         expense.setACL(acl);
     }
 
@@ -906,10 +931,10 @@ async function saveRecord() {
         await expense.save();
         alert(editingId ? '✅ 修改成功！' : '✅ 保存成功！');
         console.log('✅ 已保存到云端');
-        clearForm();
-        loadPrevDayInfo();
         
-        // 如果是在历史页面修改的，修改完刷新历史列表
+        // 6. 重新加载 (现在能查到了)
+        await loadDataForSelectedDate();
+        
         const historyPage = document.getElementById('page-history');
         if(!historyPage.classList.contains('hidden')) {
             loadHistory();
@@ -920,64 +945,6 @@ async function saveRecord() {
     }
 }
 
-// ==================== 修改记录 (修复版) ====================
-async function editRecord(id) {
-    try {
-        // 1. 从云端获取该条记录的完整数据
-        const query = new AV.Query('Expense');
-        const record = await query.get(id);
-
-        // 2. 切换到记账页面
-        showTab('entry');
-
-        // 3. 设置全局编辑ID
-        editingId = id;
-
-        // 4. 填充表单数据 (这里修复了之前的错误，应该操作 DOM 而不是 expense 对象)
-        document.getElementById('recordDate').value = record.get('date');
-        
-        // === 填充出发和回程里程 ===
-        document.getElementById('startMileage').value = record.get('startMileage') || 0;
-        document.getElementById('endMileage').value = record.get('endMileage') || 0;
-
-        // 重新计算一次总里程显示
-        calculateTotalMileage();
-
-        // 填充客户列表
-        const clients = record.get('clients') || [];
-        const container = document.getElementById('clientsContainer');
-        container.innerHTML = ''; // 先清空现有的
-        clientCount = 0;
-        
-        if (clients.length > 0) {
-            clients.forEach(c => {
-                addClientField(); // 动态添加输入框
-                const inputs = container.querySelectorAll('.client-name');
-                inputs[inputs.length - 1].value = c; // 填入值
-            });
-        } else {
-            addClientField(); // 如果没有客户，至少留一个空框
-        }
-
-        // 填充费用
-        document.getElementById('tollFee').value = record.get('tollFee') || 0;
-        document.getElementById('parkingFee').value = record.get('parkingFee') || 0;
-        document.getElementById('trainFee').value = record.get('trainFee') || 0;
-        document.getElementById('driverFee').value = record.get('driverFee') || 0;
-        document.getElementById('hotelFee').value = record.get('hotelFee') || 0;
-        document.getElementById('entertainmentFee').value = record.get('entertainmentFee') || 0;
-        document.getElementById('taxiFee').value = record.get('taxiFee') || 0;
-
-        // 清空文件上传区
-        document.getElementById('receipts').value = '';
-        document.getElementById('filePreview').innerHTML = '';
-        uploadedFiles = [];
-        
-    } catch (error) {
-        console.error('加载记录失败:', error);
-        alert('加载失败: ' + error.message);
-    }
-}
 // ==================== 删除记录 ====================
 async function deleteRecord(id) {
     // 弹出确认框
@@ -1003,8 +970,63 @@ async function deleteRecord(id) {
     }
 }
 
+// ==================== 修改记录 (覆盖模式) ====================
+async function editRecord(id) {
+    try {
+        const query = new AV.Query('Expense');
+        const record = await query.get(id);
 
-// ==================== 清空表单 ====================
+        showTab('entry');
+
+        // === 设置状态：覆盖模式 ===
+        editingId = id;
+        isOverwriteMode = true; 
+
+        // 填充日期
+        document.getElementById('recordDate').value = record.get('date');
+        
+        // 填充里程
+        document.getElementById('startMileage').value = record.get('startMileage') || 0;
+        document.getElementById('endMileage').value = record.get('endMileage') || 0;
+        calculateTotalMileage();
+        
+        // 填充客户
+        const clients = record.get('clients') || [];
+        const container = document.getElementById('clientsContainer');
+        container.innerHTML = '';
+        clientCount = 0;
+        if(clients.length > 0) {
+            clients.forEach(c => {
+                addClientField();
+                const inputs = container.querySelectorAll('.client-name');
+                inputs[inputs.length - 1].value = c;
+            });
+        } else {
+            addClientField();
+        }
+        
+        // === 关键修改：费用输入框填入旧值 (不再是清空) ===
+        document.getElementById('tollFee').value = record.get('tollFee') || '';
+        document.getElementById('parkingFee').value = record.get('parkingFee') || '';
+        document.getElementById('trainFee').value = record.get('trainFee') || '';
+        document.getElementById('driverFee').value = record.get('driverFee') || '';
+        document.getElementById('hotelFee').value = record.get('hotelFee') || '';
+        document.getElementById('entertainmentFee').value = record.get('entertainmentFee') || '';
+        document.getElementById('taxiFee').value = record.get('taxiFee') || '';
+        
+        // 图片清空
+        document.getElementById('receipts').value = '';
+        document.getElementById('filePreview').innerHTML = '';
+        uploadedFiles = [];
+        
+    } catch (error) {
+        console.error('加载记录失败:', error);
+        alert('加载失败: ' + error.message);
+    }
+}
+
+
+
 // ==================== 清空表单 (完善版) ====================
 function clearForm() {
     editingId = null; 
@@ -1037,6 +1059,67 @@ function clearForm() {
     
     // 7. (可选) 如果你想保存后日期也重置为“今天”，取消下面这行的注释
     document.getElementById('recordDate').value = new Date().toISOString().split('T')[0];
+}
+
+// ==================== 根据日期加载/重置表单 (只保留里程，清空费用) ====================
+async function loadDataForSelectedDate() {
+    const currentDateStr = document.getElementById('recordDate').value;
+    
+    // 1. 查询当前日期是否有记录
+    const query = new AV.Query('Expense');
+    query.equalTo('date', currentDateStr);
+    query.equalTo('owner', AV.User.current());
+    query.limit(1);
+    
+    const results = await query.find();
+    
+    if(results.length > 0) {
+        // === 如果当天有记录：只加载里程和客户 ===
+        const record = results[0];
+        console.log('📅 加载当天已有记录，保留里程与客户，清空费用输入');
+        
+        // A. 加载里程 (保留)
+        editingId = record.id;
+        isOverwriteMode = false; // === 新增：明确指定为追加模式 ===
+        document.getElementById('startMileage').value = record.get('startMileage') || 0;
+        document.getElementById('endMileage').value = record.get('endMileage') || 0;
+        calculateTotalMileage();
+        
+        // B. 加载客户 (保留)
+        const clients = record.get('clients') || [];
+        const container = document.getElementById('clientsContainer');
+        container.innerHTML = '';
+        clientCount = 0;
+        if(clients.length > 0) {
+            clients.forEach(c => {
+                addClientField();
+                const inputs = container.querySelectorAll('.client-name');
+                inputs[inputs.length - 1].value = c;
+            });
+        } else {
+            addClientField();
+        }
+        
+        // C. 【关键修改】费用输入框清空 (不显示累计值)
+        const feeFields = ['tollFee', 'parkingFee', 'trainFee', 'driverFee', 
+                           'hotelFee', 'entertainmentFee', 'taxiFee'];
+        feeFields.forEach(id => {
+            document.getElementById(id).value = ''; // 设为空
+        });
+        
+        // D. 清空文件上传区
+        document.getElementById('receipts').value = '';
+        document.getElementById('filePreview').innerHTML = '';
+        uploadedFiles = [];
+        
+    } else {
+        // === 如果当天没记录：彻底清空 ===
+        console.log('📅 当天无记录，清空表单');
+        clearForm();
+    }
+    
+    // 无论加载与否，都更新一下“前一天信息”提示
+    loadPrevDayInfo();
 }
 
 // ==================== 获取所有记录 (辅助函数) ====================
