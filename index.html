@@ -1005,22 +1005,38 @@ async function deleteRecord(id) {
 
 
 // ==================== 清空表单 ====================
+// ==================== 清空表单 (完善版) ====================
 function clearForm() {
-	editingId = null; 
+    editingId = null; 
+    
+    // 1. 清空出发和回程里程 (这是之前漏掉的)
+    document.getElementById('startMileage').value = '';
+    document.getElementById('endMileage').value = '';
+    
+    // 2. 清空自动计算的总里程
     document.getElementById('mileage').value = '';
+    
+    // 3. 清空客户列表
     document.getElementById('clientsContainer').innerHTML = '';
     clientCount = 0;
-    addClientField();
+    addClientField(); // 重新生成一个空输入框
     
+    // 4. 清空所有费用
     ['tollFee', 'parkingFee', 'trainFee', 'driverFee', 
      'hotelFee', 'entertainmentFee', 'taxiFee'].forEach(id => {
         document.getElementById(id).value = '';
     });
     
+    // 5. 清空文件上传
     document.getElementById('receipts').value = '';
     document.getElementById('filePreview').innerHTML = '';
     uploadedFiles = [];
-    calculateFuelSubsidy();
+    
+    // 6. 重置油补显示为 0.00
+    document.getElementById('fuelSubsidyDisplay').textContent = '0.00';
+    
+    // 7. (可选) 如果你想保存后日期也重置为“今天”，取消下面这行的注释
+    document.getElementById('recordDate').value = new Date().toISOString().split('T')[0];
 }
 
 // ==================== 获取所有记录 (辅助函数) ====================
@@ -1307,62 +1323,129 @@ async function calculateSummary() {
 }
 
 // ==================== 导出Excel ====================
+// ==================== 导出Excel (合并版 + 修复Bin格式) ====================
+// ==================== 导出Excel (修复时区合并版) ====================
 async function exportToExcel() {
     const monthValue = document.getElementById('exportMonth').value;
     const records = await getAllRecords();
-    const monthRecords = records.filter(r => r.get('date').startsWith(monthValue))
-                               .sort((a, b) => new Date(a.get('date')) - new Date(b.get('date')));
+    
+    // 筛选当前月份的数据
+    const monthRecords = records.filter(r => {
+        const d = r.get('date');
+        const dateStr = d ? d.toString() : '';
+        return dateStr.startsWith(monthValue);
+    });
     
     if(monthRecords.length === 0) {
         alert('该月份暂无数据');
         return;
     }
 
-    const data = monthRecords.map(r => {
-        const clients = (r.get('clients') || []).join('、');
-        const startMileage = r.get('startMileage') || 0;
-        const endMileage = r.get('endMileage') || 0;
-        const fuelSubsidy = r.get('fuelSubsidy') || 0;
-        const tollFee = r.get('tollFee') || 0;
-        const parkingFee = r.get('parkingFee') || 0;
-        const trainFee = r.get('trainFee') || 0;
-        const driverFee = r.get('driverFee') || 0;
-        const hotelFee = r.get('hotelFee') || 0;
-        const entertainmentFee = r.get('entertainmentFee') || 0;
-        const taxiFee = r.get('taxiFee') || 0;
-        // 计算小计（使用数据库存的 mileage，或者重新算 start-end 也可以）
-        const totalMileage = r.get('mileage') || 0; 
-        
-        return {
-    '日期': new Date(r.get('date')).toLocaleDateString('zh-CN'),
-    '出发公里数': startMileage,
-    '回程公里数': endMileage,
-    '公里数': totalMileage, // 这里的 totalMileage 就是差值
-    // 删掉下面这行重复的 '公里数'
-    // '公里数': r.get('mileage') || 0, 
-    '拜访客户': clients,
-    '油补': fuelSubsidy,
-    '过路费': tollFee,
-    '停车费': parkingFee,
-    '高铁费': trainFee,
-    '代驾费': driverFee,
-    '住宿费': hotelFee,
-    '招待费': entertainmentFee,
-    '打车费': taxiFee,
-    '小计': fuelSubsidy + tollFee + parkingFee + trainFee + driverFee + hotelFee + entertainmentFee + taxiFee
-};
+    console.log(`🔍 本月共查询到 ${monthRecords.length} 条原始记录，开始合并...`);
 
+    // 1. 定义 Map 用来合并
+    const summaryMap = {};
+
+    monthRecords.forEach(r => {
+        let rawDate = r.get('date');
+        let dateKey = '';
+        
+        // === 核心修复：更健壮的日期 Key 生成逻辑 ===
+        if (typeof rawDate === 'string') {
+            // 如果是字符串 "2023-10-01..."，直接截取，避免时区转换问题
+            dateKey = rawDate.substring(0, 10);
+        } else {
+            // 如果是 Date 对象，使用 toLocaleDateString('en-CA') 获取本地 YYYY-MM-DD
+            // 'en-CA' (加拿大) 格式正好是 YYYY-MM-DD
+            try {
+                dateKey = new Date(rawDate).toLocaleDateString('en-CA');
+            } catch (e) {
+                // 兜底处理
+                dateKey = String(rawDate).substring(0, 10);
+            }
+        }
+
+        // === 调试日志：打印每一条记录的 Key，方便你查看是否一致 ===
+        console.log(`🔍 记录ID: ${r.id} | 原始日期: ${rawDate} | 合并Key: ${dateKey}`);
+
+        if (!summaryMap[dateKey]) {
+            summaryMap[dateKey] = {
+                date: dateKey, 
+                startMileage: 99999999, 
+                endMileage: -1,         
+                totalMileage: 0,        
+                clients: new Set(),     
+                fuelSubsidy: 0,
+                tollFee: 0,
+                parkingFee: 0,
+                trainFee: 0,
+                driverFee: 0,
+                hotelFee: 0,
+                entertainmentFee: 0,
+                taxiFee: 0
+            };
+        }
+
+        const item = summaryMap[dateKey];
+
+        // --- 里程逻辑 ---
+        item.startMileage = Math.min(item.startMileage, r.get('startMileage') || 0);
+        item.endMileage = Math.max(item.endMileage, r.get('endMileage') || 0);
+        item.totalMileage += (r.get('mileage') || 0);
+
+        // --- 费用累加 ---
+        item.fuelSubsidy += (r.get('fuelSubsidy') || 0);
+        item.tollFee += (r.get('tollFee') || 0);
+        item.parkingFee += (r.get('parkingFee') || 0);
+        item.trainFee += (r.get('trainFee') || 0);
+        item.driverFee += (r.get('driverFee') || 0);
+        item.hotelFee += (r.get('hotelFee') || 0);
+        item.entertainmentFee += (r.get('entertainmentFee') || 0);
+        item.taxiFee += (r.get('taxiFee') || 0);
+
+        // --- 客户合并 ---
+        const rClients = r.get('clients') || [];
+        rClients.forEach(c => item.clients.add(c));
     });
 
+    // 2. 转换为数组
+    const data = Object.values(summaryMap).sort((a, b) => a.date.localeCompare(b.date)).map(item => {
+        const finalStart = item.startMileage === 99999999 ? 0 : item.startMileage;
+        const finalEnd = item.endMileage === -1 ? 0 : item.endMileage;
+        const clientStr = Array.from(item.clients).join('、');
+        
+        const grandTotal = item.fuelSubsidy + item.tollFee + item.parkingFee + 
+                           item.trainFee + item.driverFee + item.hotelFee + 
+                           item.entertainmentFee + item.taxiFee;
+
+        return {
+            '日期': item.date,
+            '出发公里数': finalStart,
+            '回程公里数': finalEnd,
+            '公里数': item.totalMileage, 
+            '拜访客户': clientStr,
+            '油补': item.fuelSubsidy.toFixed(2),
+            '过路费': item.tollFee.toFixed(2),
+            '停车费': item.parkingFee.toFixed(2),
+            '高铁费': item.trainFee.toFixed(2),
+            '代驾费': item.driverFee.toFixed(2),
+            '住宿费': item.hotelFee.toFixed(2),
+            '招待费': item.entertainmentFee.toFixed(2),
+            '打车费': item.taxiFee.toFixed(2),
+            '小计': grandTotal.toFixed(2)
+        };
+    });
+
+    console.log(`✅ 合并完成，最终生成 ${data.length} 行数据。`);
+
+    // 3. 导出
     const ws = XLSX.utils.json_to_sheet(data);
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "报销明细");
-    
     const [year, month] = monthValue.split('-');
-    XLSX.writeFile(wb, `报销记录_${year}年${month}月.xlsx`);
-    
-    console.log('✅ Excel导出成功');
+    XLSX.writeFile(wb, `报销记录_${year}年${month}月.xlsx`, { bookType: 'xlsx' });
 }
+
 
 // ==================== 设置管理 ====================
 function loadSettings() {
